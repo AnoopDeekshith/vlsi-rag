@@ -187,6 +187,16 @@ a { color: var(--cyan); }
 }
 .btn-ghost:hover { border-color: var(--border-lt); color: var(--text-mid); }
 
+.btn-export {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--cyan-dim); border: 1px solid var(--cyan-mid);
+  border-radius: 6px; color: var(--cyan); padding: 6px 14px;
+  cursor: pointer; font-size: 12px; font-weight: 500;
+  font-family: 'DM Sans', sans-serif; transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn-export:hover { background: var(--cyan-mid); }
+
 /* ── Chat View ── */
 .chat-view {
   flex: 1; display: flex; flex-direction: column;

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   Upload, MessageSquare, FileText, Settings, Trash2, ChevronRight,
   Cpu, Zap, BookOpen, Loader2, Send, GraduationCap, Image, Menu, X,
-  DollarSign
+  DollarSign, Download
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
@@ -382,11 +382,35 @@ export default function App() {
   const fileRef = useRef(null);
   const textareaRef = useRef(null);
 
-  // Rebuild index from docs on mount
+  // Rebuild index from docs on mount — try bundled repo data first, then localStorage
   useEffect(() => {
-    const allChunks = docs.flatMap((d) => d.chunks || []);
-    setChunks(allChunks);
-    if (allChunks.length) setIndex(buildIndex(allChunks));
+    const loadDocs = async () => {
+      let loadedDocs = docs; // from localStorage init
+
+      // Try loading pre-bundled docs from public/data/docs.json
+      try {
+        const resp = await fetch(import.meta.env.BASE_URL + "data/docs.json");
+        if (resp.ok) {
+          const bundledDocs = await resp.json();
+          if (bundledDocs?.length) {
+            // Merge: bundled docs + any localStorage docs not already in bundled set
+            const bundledNames = new Set(bundledDocs.map((d) => d.name));
+            const extraDocs = loadedDocs.filter((d) => !bundledNames.has(d.name));
+            loadedDocs = [...bundledDocs, ...extraDocs];
+            setDocs(loadedDocs);
+            // Also persist merged set to localStorage
+            lsSet(LS_KEYS.docs, loadedDocs);
+          }
+        }
+      } catch {
+        // No bundled data or fetch failed — use localStorage docs
+      }
+
+      const allChunks = loadedDocs.flatMap((d) => d.chunks || []);
+      setChunks(allChunks);
+      if (allChunks.length) setIndex(buildIndex(allChunks));
+    };
+    loadDocs();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll chat — scroll the container, not the page
@@ -547,6 +571,19 @@ export default function App() {
     setDocs([]); setChunks([]); setIndex(null); setMessages([]);
     localStorage.removeItem(LS_KEYS.docs);
     localStorage.removeItem(LS_KEYS.chat);
+  };
+
+  /* ── Export for Repo ── */
+  const exportForRepo = () => {
+    if (!docs.length) return;
+    const json = JSON.stringify(docs, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "docs.json";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   /* ── Chat (Streaming) ── */
@@ -844,6 +881,11 @@ Use LaTeX for all equations. Format in Markdown.`;
                 <h2 className="view-title">Documents</h2>
                 <p className="view-sub">Upload PDFs, images, Verilog, and notes — they get chunked and indexed for retrieval</p>
               </div>
+              {docs.length > 0 && (
+                <button className="btn-export" onClick={exportForRepo}>
+                  <Download size={14} /> Export for Repo
+                </button>
+              )}
             </div>
 
             <div
