@@ -180,6 +180,8 @@ const callClaudeAPIStreaming = async (apiKey, userMsg, context, onChunk) => {
   const decoder = new TextDecoder();
   let fullText = "";
   let buffer = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -196,15 +198,21 @@ const callClaudeAPIStreaming = async (apiKey, userMsg, context, onChunk) => {
 
       try {
         const parsed = JSON.parse(data);
+        if (parsed.type === "message_start" && parsed.message?.usage) {
+          inputTokens = parsed.message.usage.input_tokens || 0;
+        }
         if (parsed.type === "content_block_delta" && parsed.delta?.text) {
           fullText += parsed.delta.text;
           onChunk(fullText);
+        }
+        if (parsed.type === "message_delta" && parsed.usage) {
+          outputTokens = parsed.usage.output_tokens || 0;
         }
       } catch {}
     }
   }
 
-  return fullText || "No response received.";
+  return { text: fullText || "No response received.", inputTokens, outputTokens };
 };
 
 // Non-streaming version for PDF/image extraction and exam prep
@@ -226,7 +234,10 @@ const callClaudeAPI = async (apiKey, userMsg, context) => {
   });
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
-  return data.content?.map((c) => c.text || "").join("\n") || "No response received.";
+  const text = data.content?.map((c) => c.text || "").join("\n") || "No response received.";
+  const inputTokens = data.usage?.input_tokens || 0;
+  const outputTokens = data.usage?.output_tokens || 0;
+  return { text, inputTokens, outputTokens };
 };
 
 const extractPDF = async (apiKey, b64Data) => {
@@ -374,8 +385,10 @@ export default function App() {
   const [examTopic, setExamTopic] = useState("");
   const [examResult, setExamResult] = useState(null);
   const [examLoading, setExamLoading] = useState(false);
-  const [balance, setBalance] = useState(null);
-  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [totalCredits, setTotalCredits] = useState(() => lsGet("vlsi-rag-credits") || 0);
+  const [totalSpend, setTotalSpend] = useState(() => lsGet("vlsi-rag-total-spend") || 0);
+  const [sessionSpend, setSessionSpend] = useState(0);
+  const [sessionTokens, setSessionTokens] = useState({ input: 0, output: 0 });
 
   const chatEndRef = useRef(null);
   const chatContainerRef = useRef(null);
@@ -432,60 +445,29 @@ export default function App() {
     lsSet(LS_KEYS.apiKey, key);
   };
 
-  /* ── Balance ── */
-  const fetchBalance = async (key) => {
-    if (!key) { setBalance(null); return; }
-    setBalanceLoading(true);
-    try {
-      const resp = await fetch("https://api.anthropic.com/v1/messages/count_tokens", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": key,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          messages: [{ role: "user", content: "hi" }],
-        }),
-      });
-      // If token counting works, the key is valid — now fetch billing
-      if (resp.ok) {
-        // Unfortunately the billing API isn't available via browser CORS,
-        // so we track usage locally as an estimate
-        setBalance("valid");
-      } else {
-        const err = await resp.json();
-        if (err.error?.type === "authentication_error") {
-          setBalance("invalid");
-        } else {
-          setBalance("valid");
-        }
-      }
-    } catch {
-      setBalance("unknown");
-    }
-    setBalanceLoading(false);
+  /* ── Credit Balance ── */
+  const saveTotalCredits = (val) => {
+    const num = parseFloat(val) || 0;
+    setTotalCredits(num);
+    lsSet("vlsi-rag-credits", num);
   };
 
-  // Fetch balance when API key changes
-  useEffect(() => {
-    if (apiKey) fetchBalance(apiKey);
-    else setBalance(null);
-  }, [apiKey]);
-
-  // Track estimated spend locally
-  const [estimatedSpend, setEstimatedSpend] = useState(() => lsGet("vlsi-rag-spend") || 0);
+  // Sonnet 4 pricing: $3/M input, $15/M output
   const addSpend = (inputTokens, outputTokens) => {
-    // Sonnet pricing: $3/M input, $15/M output
     const cost = (inputTokens * 3 + outputTokens * 15) / 1_000_000;
-    setEstimatedSpend((prev) => {
+    setSessionSpend((prev) => prev + cost);
+    setSessionTokens((prev) => ({
+      input: prev.input + inputTokens,
+      output: prev.output + outputTokens,
+    }));
+    setTotalSpend((prev) => {
       const next = prev + cost;
-      lsSet("vlsi-rag-spend", next);
+      lsSet("vlsi-rag-total-spend", next);
       return next;
     });
   };
+
+  const remainingCredits = Math.max(0, totalCredits - totalSpend);
 
   /* ── Auto-resize textarea ── */
   const autoResize = () => {
@@ -611,7 +593,7 @@ export default function App() {
       const placeholderIdx = messages.length + 1; // +1 for the user msg we just added
       setMessages((m) => [...m, { role: "assistant", content: "", sources, streaming: true }]);
 
-      const finalText = await callClaudeAPIStreaming(apiKey, userMsg, context, (partialText) => {
+      const { text: finalText, inputTokens, outputTokens } = await callClaudeAPIStreaming(apiKey, userMsg, context, (partialText) => {
         setMessages((m) => {
           const updated = [...m];
           const last = updated[updated.length - 1];
@@ -632,10 +614,8 @@ export default function App() {
         return updated;
       });
 
-      // Rough token estimate for spend tracking
-      const inputEst = (context.length + userMsg.length) / 4;
-      const outputEst = finalText.length / 4;
-      addSpend(inputEst, outputEst);
+      // Track actual token usage
+      addSpend(inputTokens, outputTokens);
 
     } catch (e) {
       setMessages((m) => {
@@ -671,16 +651,14 @@ Total: 40 points. Provide clear point breakdowns.
 After all questions, provide a DETAILED answer key with full worked solutions.
 Use LaTeX for all equations. Format in Markdown.`;
 
-      const response = await callClaudeAPI(
+      const { text: response, inputTokens, outputTokens } = await callClaudeAPI(
         apiKey,
         `Generate a practice exam on: ${examTopic}. Use course material context if available.`,
         examSystem + "\n\n" + context
       );
       setExamResult(response);
       // Track spend
-      const inputEst = (examSystem.length + context.length + examTopic.length) / 4;
-      const outputEst = response.length / 4;
-      addSpend(inputEst, outputEst);
+      addSpend(inputTokens, outputTokens);
     } catch (e) {
       setExamResult(`**Error:** ${e.message}`);
     }
@@ -767,11 +745,21 @@ Use LaTeX for all equations. Format in Markdown.`;
             <span>{apiKey ? "API Connected" : "No API Key"}</span>
           </div>
           {apiKey && (
-            <div className="stat spend">
-              <DollarSign size={13} />
-              <span>~${estimatedSpend.toFixed(4)} spent</span>
-              <button className="reset-spend" onClick={() => { setEstimatedSpend(0); lsSet("vlsi-rag-spend", 0); }} title="Reset counter">↺</button>
-            </div>
+            <>
+              <div className="stat-divider" />
+              <div className="stat spend-label">
+                <DollarSign size={12} />
+                <span>Session: ${sessionSpend.toFixed(4)}</span>
+              </div>
+              <div className="stat spend-label">
+                <span className="stat-indent">Total: ${totalSpend.toFixed(4)}</span>
+              </div>
+              {totalCredits > 0 && (
+                <div className={`stat ${remainingCredits < 0.5 ? "low-balance" : "balance-ok"}`}>
+                  <span className="stat-indent">Left: ${remainingCredits.toFixed(2)}</span>
+                </div>
+              )}
+            </>
           )}
         </div>
       </aside>
@@ -995,6 +983,46 @@ Use LaTeX for all equations. Format in Markdown.`;
               />
               <div className={`key-status ${apiKey ? "ok" : "bad"}`}>
                 {apiKey ? "✓ API key set" : "✗ No API key configured"}
+              </div>
+            </div>
+
+            <div className="settings-card">
+              <h3>API Credit Balance</h3>
+              <p>Enter the total credits you added at <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener noreferrer">console.anthropic.com/settings/billing</a>. The app tracks exact token usage to show your remaining balance in the sidebar.</p>
+              <div className="credit-input-row">
+                <span className="credit-dollar">$</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={totalCredits || ""}
+                  onChange={(e) => saveTotalCredits(e.target.value)}
+                  placeholder="5.00"
+                  className="chat-input mono credit-field"
+                />
+              </div>
+              <div className="credit-summary">
+                <div className="credit-row">
+                  <span>Total credits</span>
+                  <span className="credit-val">${totalCredits.toFixed(2)}</span>
+                </div>
+                <div className="credit-row">
+                  <span>Total spent (all sessions)</span>
+                  <span className="credit-val">${totalSpend.toFixed(4)}</span>
+                </div>
+                <div className="credit-row">
+                  <span>This session</span>
+                  <span className="credit-val">${sessionSpend.toFixed(4)}</span>
+                </div>
+                <div className="credit-row">
+                  <span>Tokens this session</span>
+                  <span className="credit-val">{sessionTokens.input.toLocaleString()} in / {sessionTokens.output.toLocaleString()} out</span>
+                </div>
+                <div className="credit-divider" />
+                <div className={`credit-row ${remainingCredits < 0.5 ? "credit-low" : "credit-good"}`}>
+                  <span><strong>Remaining</strong></span>
+                  <span className="credit-val"><strong>${remainingCredits.toFixed(4)}</strong></span>
+                </div>
               </div>
             </div>
 

@@ -115,19 +115,67 @@ a { color: var(--cyan); }
 .stat.connected  { color: var(--green); }
 .stat.disconnected { color: var(--red); }
 
-.stat.spend {
+.stat-divider {
+  height: 1px; background: var(--border);
+  margin: 4px 0;
+}
+
+.stat.spend-label {
   color: var(--amber);
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
 }
 
-.reset-spend {
-  background: transparent; border: none;
-  color: var(--text-dim); cursor: pointer;
-  font-size: 14px; padding: 0 2px;
-  line-height: 1; transition: color 0.15s;
+.stat-indent { margin-left: 21px; }
+
+.stat.balance-ok {
+  color: var(--green);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
 }
-.reset-spend:hover { color: var(--text); }
+
+.stat.low-balance {
+  color: var(--red);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+/* ── Credit Balance Settings ── */
+.credit-input-row {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 14px;
+}
+
+.credit-dollar {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 16px; font-weight: 600; color: var(--text-mid);
+}
+
+.credit-field {
+  max-width: 140px;
+}
+
+.credit-summary {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+
+.credit-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12px; color: var(--text-mid);
+}
+
+.credit-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+.credit-divider {
+  height: 1px; background: var(--border); margin: 4px 0;
+}
+
+.credit-row.credit-good { color: var(--green); }
+.credit-row.credit-low { color: var(--red); }
 
 .status-dot {
   width: 7px; height: 7px; border-radius: 50%;
